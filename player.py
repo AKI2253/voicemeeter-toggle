@@ -1,14 +1,9 @@
 """音频播放器模块。
 
-使用 sounddevice 直接将音频播放到 VoiceMeeter VAIO Input 设备，
-不改变 Windows 默认播放设备（耳机/音响不受影响）。
+使用 sounddevice 直接将音频播放到 VoiceMeeter VAIO Input 设备。
 
-音频流向:
-  Python sounddevice → "VoiceMeeter Input (VAIO)" → VoiceMeeter Strip[2]
-    → B1 (虚拟麦, QQ 采集)
-    → A1 (物理输出, 用户监听)
-
-支持格式: WAV/FLAC/OGG (原生), MP3 (需 ffmpeg)
+线程安全: Lock 保护可变状态, 避免 sd.stop() 跨线程调用导致 PortAudio 崩溃。
+停止策略: 不跨线程 sd.stop(), 而是在播放线程内检测停止信号。
 """
 
 import threading
@@ -28,25 +23,23 @@ class AudioPlayer:
     """音频播放器 —— 输出到 VoiceMeeter VAIO 虚拟输入。"""
 
     def __init__(self):
-        self._stream: Optional[sd.OutputStream] = None
         self._vaio_device: Optional[int] = None
-        self._is_playing: bool = False
         self._audio_data: Optional[np.ndarray] = None
         self._sample_rate: int = 44100
-        self._position: int = 0
+        self._is_playing: bool = False
         self._on_finished: Optional[Callable[[], None]] = None
 
-        # 查找 VAIO 设备
+        self._lock = threading.Lock()
+        self._stop_requested = threading.Event()
+
         self._find_vaio_device()
 
     def _find_vaio_device(self) -> None:
-        """查找 VoiceMeeter VAIO Input 播放设备。"""
         devices = sd.query_devices()
         for i, d in enumerate(devices):
             if d["max_output_channels"] <= 0:
                 continue
             name = d["name"]
-            # 匹配主 VAIO Input, 排除 AUX/VAIO3/In 1-5
             if ("Voicemeeter" in name and "Input" in name
                     and "VAIO" in name
                     and "AUX" not in name
@@ -54,136 +47,140 @@ class AudioPlayer:
                     and "In " not in name.split("(")[0]):
                 self._vaio_device = i
                 return
-
-        # 降级: 接受任何含 VoiceMeeter + Input 的设备
         for i, d in enumerate(devices):
             if d["max_output_channels"] <= 0:
                 continue
-            name = d["name"]
             if "Voicemeeter" in name and "Input" in name:
                 self._vaio_device = i
                 return
 
     @property
     def is_available(self) -> bool:
-        """VAIO 设备是否可用。"""
         return self._vaio_device is not None
 
     @property
     def is_playing(self) -> bool:
-        """是否正在播放。"""
-        return self._is_playing
+        with self._lock:
+            return self._is_playing
 
     def load(self, filepath: str) -> None:
-        """加载音频文件。
-
-        支持 WAV/FLAC/OGG (soundfile) 和 MP3 (pydub + ffmpeg)。
-
-        Raises:
-            PlayerError: 加载失败
-        """
         path = Path(filepath)
         if not path.exists():
             raise PlayerError(f"文件不存在: {filepath}")
 
         suffix = path.suffix.lower()
-
         try:
             if suffix in (".wav", ".flac", ".ogg"):
                 import soundfile as sf
-                self._audio_data, self._sample_rate = sf.read(filepath, dtype="float32")
+                data, sr = sf.read(filepath, dtype="float32")
             elif suffix in (".mp3", ".m4a", ".aac", ".wma"):
-                self._load_with_pydub(filepath)
+                data, sr = self._load_with_pydub(filepath)
             else:
-                # 尝试 soundfile 兜底
                 import soundfile as sf
-                self._audio_data, self._sample_rate = sf.read(filepath, dtype="float32")
+                data, sr = sf.read(filepath, dtype="float32")
         except Exception as e:
             raise PlayerError(f"加载音频失败: {e}") from e
 
-        # 转单声道 (VoiceMeeter VAIO 支持多声道，但保险起见统一转)
-        if self._audio_data.ndim > 1:
-            self._audio_data = self._audio_data.mean(axis=1).astype(np.float32)
+        if data.ndim > 1:
+            data = data.mean(axis=1).astype(np.float32)
 
-        self._position = 0
+        with self._lock:
+            self._audio_data = data
+            self._sample_rate = sr
 
-    def _load_with_pydub(self, filepath: str) -> None:
-        """使用 pydub 加载 MP3 等格式 (需要 ffmpeg)。"""
+    def _load_with_pydub(self, filepath: str):
         try:
             from pydub import AudioSegment
             audio = AudioSegment.from_file(filepath)
-            self._sample_rate = audio.frame_rate
-            # 转单声道
+            sr = audio.frame_rate
             if audio.channels > 1:
                 audio = audio.set_channels(1)
-            # 转 numpy float32
             samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
             samples /= np.iinfo(audio.array_type).max
-            self._audio_data = samples
+            return samples, sr
         except FileNotFoundError:
             raise PlayerError(
                 "播放 MP3 需要 ffmpeg。\n"
                 "请安装 ffmpeg 并添加到 PATH，\n"
-                "或使用 WAV/FLAC 格式。\n"
-                "下载: https://ffmpeg.org/download.html"
+                "或使用 WAV/FLAC 格式。"
             )
-        except Exception as e:
-            raise PlayerError(f"MP3 解码失败: {e}") from e
 
     def play(self, on_finished: Optional[Callable[[], None]] = None) -> None:
-        """开始播放。
+        """开始播放。"""
+        with self._lock:
+            if self._audio_data is None:
+                raise PlayerError("没有加载音频文件")
+            self._is_playing = True
+            self._on_finished = on_finished
+            self._stop_requested.clear()
 
-        Args:
-            on_finished: 播放完毕回调 (在音频线程中调用)
-        """
-        if self._audio_data is None:
-            raise PlayerError("没有加载音频文件，请先调用 load()")
-        if self._vaio_device is None:
-            raise PlayerError("未找到 VoiceMeeter VAIO 设备")
-
-        self._on_finished = on_finished
-        self._position = 0
-        self._is_playing = True
-
-        # 在后台线程中播放 (避免阻塞 GUI)
         thread = threading.Thread(target=self._play_thread, daemon=True)
         thread.start()
 
     def _play_thread(self) -> None:
-        """后台播放线程。"""
+        """使用 OutputStream + callback 播放 (可在回调中安全终止)。"""
+        data = None
+        sr = 44100
+        device = None
+
+        with self._lock:
+            if self._audio_data is not None:
+                data = self._audio_data.copy()  # 拷贝, 避免主线程 load() 修改
+                sr = self._sample_rate
+            device = self._vaio_device
+
+        if data is None or device is None:
+            with self._lock:
+                self._is_playing = False
+            return
+
+        position = [0]  # 用列表在闭包中修改
+
+        def callback(outdata, frames, time_info, status):
+            if status:
+                return
+            if self._stop_requested.is_set():
+                raise sd.CallbackStop()
+
+            remaining = len(data) - position[0]
+            if remaining <= 0:
+                raise sd.CallbackStop()
+
+            chunk = min(frames, remaining)
+            outdata[:chunk, 0] = data[position[0]:position[0] + chunk]
+            if chunk < frames:
+                outdata[chunk:, 0] = 0
+            position[0] += chunk
+
         try:
-            remaining = self._audio_data[self._position:]
-
-            # 确保采样率匹配 VAIO 设备
-            try:
-                device_info = sd.query_devices(self._vaio_device)
-                device_sr = int(device_info.get("default_samplerate", self._sample_rate))
-            except Exception:
-                device_sr = self._sample_rate
-
-            sd.play(
-                remaining,
-                samplerate=self._sample_rate,
-                device=self._vaio_device,
-                blocking=True,
+            stream = sd.OutputStream(
+                samplerate=sr,
+                device=device,
+                channels=1,
+                callback=callback,
             )
+            with stream:
+                while stream.active:
+                    sd.sleep(100)
+        except sd.CallbackStop:
+            pass
         except Exception:
-            pass  # 播放错误不崩溃
+            pass
         finally:
-            self._audio_data = None  # 释放内存
-            self._position = 0
-            self._is_playing = False
-            if self._on_finished:
+            stopped_by_user = self._stop_requested.is_set()
+            with self._lock:
+                self._is_playing = False
+                cb = self._on_finished
+                self._on_finished = None
+            # 自然播完才触发回调; 被 stop 中断则跳过
+            if cb and not stopped_by_user:
                 try:
-                    self._on_finished()
+                    cb()
                 except Exception:
                     pass
 
     def stop(self) -> None:
-        """停止播放。"""
-        try:
-            sd.stop()
-        except Exception:
-            pass
-        self._is_playing = False
-        self._position = 0
+        """请求停止 — 线程安全, 不跨线程调 sd.stop()。"""
+        self._stop_requested.set()
+        with self._lock:
+            self._is_playing = False

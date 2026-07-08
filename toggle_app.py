@@ -291,29 +291,32 @@ class ToggleApp:
             try:
                 self.player.load(self._selected_file)
                 self.player.play(on_finished=self._on_playback_finished)
-                return  # 继续播放, 不更新 UI
+                return
             except PlayerError:
                 pass
         # 停止或自动停止
+        self._stop_polling()
         if self._auto_stop_var.get():
             self._set_play_state(False)
             self._set_status("✅ 播放完毕 — MP3 → 麦克风 工作中")
 
     def _start_polling(self) -> None:
         """开始轮询播放器状态。"""
+        self._stop_polling()  # 先取消旧的
         self._poll_playback()
 
     def _stop_polling(self) -> None:
-        """停止轮询。"""
-        self._poll_id = None
+        """停止轮询 — 真正取消已排队的回调。"""
+        if self._poll_id is not None:
+            self.root.after_cancel(self._poll_id)
+            self._poll_id = None
 
     def _poll_playback(self) -> None:
         """轮询检查播放器是否播完。"""
         if not self.player.is_playing:
-            # player.is_playing 已为 False, on_finished 已触发
             return
 
-        # 继续轮询 (作为 on_finished 的兜底)
+        # 继续轮询 (作为 on_finished 的兜底, 防止回调丢失)
         self._poll_id = self.root.after(RECORDER_POLL_INTERVAL, self._poll_playback)
 
     # ── 全局热键 ──────────────────────────────────────────────────────
@@ -348,15 +351,12 @@ class ToggleApp:
 
     def _hotkey_action(self) -> None:
         """在主线程中执行热键动作 (播放/停止切换)。"""
-        try:
-            if self.player.is_playing:
-                self.player.stop()
-                self._set_play_state(False)
-                self._stop_polling()
-            else:
-                self._on_play_click()
-        except Exception:
-            pass
+        if self.player.is_playing:
+            self.player.stop()
+            self._set_play_state(False)
+            self._stop_polling()
+        else:
+            self._on_play_click()
 
     # ── 切换逻辑 ──────────────────────────────────────────────────────
 
