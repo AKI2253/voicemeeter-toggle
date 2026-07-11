@@ -89,15 +89,14 @@ class AudioPlayer:
             self._sample_rate = sr
 
     def _load_with_pydub(self, filepath: str):
+        import subprocess as _sp
+        _orig = _sp.Popen
+        _no_win = 0x08000000  # CREATE_NO_WINDOW: 屏蔽 ffmpeg 命令行弹窗
+        _sp.Popen = lambda *a, **kw: _orig(
+            *a, **{**kw, 'creationflags': kw.get('creationflags', 0) | _no_win})
         try:
-            # 屏蔽 ffmpeg 命令行窗口, 防止弹窗打断 QQ 录音
-            import subprocess as _sp
-            _orig = _sp.Popen
-            _no_win = 0x08000000
-            _sp.Popen = lambda *a, **kw: _orig(*a, **{**kw, 'creationflags': kw.get('creationflags', 0) | _no_win})
             from pydub import AudioSegment
             audio = AudioSegment.from_file(filepath)
-            _sp.Popen = _orig
             sr = audio.frame_rate
             if audio.channels > 1:
                 audio = audio.set_channels(1)
@@ -110,6 +109,8 @@ class AudioPlayer:
                 "请安装 ffmpeg 并添加到 PATH，\n"
                 "或使用 WAV/FLAC 格式。"
             )
+        finally:
+            _sp.Popen = _orig  # 无论成败都恢复, 防止后续 subprocess 异常
 
     def play(self, on_finished: Optional[Callable[[], None]] = None) -> None:
         """开始播放。"""
