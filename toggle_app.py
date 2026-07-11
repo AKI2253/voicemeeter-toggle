@@ -418,68 +418,44 @@ class ToggleApp:
         except Exception:
             self._ime_layout = None
 
-        def on_key(e):
+        # 弹窗关闭时恢复热键
+        def _on_dialog_close():
+            self._restore_ime()
+            self._setup_hotkeys()
+            dialog.destroy()
+        dialog.protocol("WM_DELETE_WINDOW", _on_dialog_close)
+
+        def _on_key(e):
             if e.event_type == "down":
-                name = e.name.lower() if e.name else e.scan_code
-                # 规范化键名
+                name = e.name.lower() if e.name else str(e.scan_code)
                 if name in ("left shift", "shift"): name = "shift"
                 elif name in ("left ctrl", "ctrl"): name = "ctrl"
                 elif name in ("left alt", "alt"): name = "alt"
                 elif name in ("left windows", "right windows"): name = "windows"
                 pressed.add(name)
-                combo = "+".join(sorted(pressed))
-                var.set(combo)
+                var.set("+".join(sorted(pressed)))
             elif e.event_type == "up":
-                # 松手: 所有键都松开了 → 完成
-                pass
+                name = e.name.lower() if e.name else str(e.scan_code)
+                if name in ("left shift", "shift"): name = "shift"
+                elif name in ("left ctrl", "ctrl"): name = "ctrl"
+                elif name in ("left alt", "alt"): name = "alt"
+                elif name in ("left windows", "right windows"): name = "windows"
+                pressed.discard(name)
+                if not pressed:
+                    keyboard.unhook_all()
+                    btn_text.set("开始录入")
+                    self._restore_ime()
+                    combo = var.get()
+                    if not combo or combo == "按下组合键...":
+                        var.set(original_value)
+                    # 恢复全局热键 (unhook_all 会清掉所有 hook)
+                    self._setup_hotkeys()
 
-        # 先用一个小延迟确保之前的状态清掉
-        dialog.after(100, lambda: _start_capture())
-
-        def _start_capture():
-            btn_text.set("录入中...")
-            var.set("按下组合键...")
-            pressed.clear()
-            keyboard.hook(on_key)
-
-            def check_done():
-                # 检查是否所有键都松开了 (通过持续监控)
-                # 简化: 用 keyboard 的 unhook + 一个短暂等待
-                pass
-
-            # 实际: 监听直到所有按下键释放
-            def on_key_full(e):
-                if e.event_type == "down":
-                    name = e.name.lower() if e.name else str(e.scan_code)
-                    if name in ("left shift", "shift"): name = "shift"
-                    elif name in ("left ctrl", "ctrl"): name = "ctrl"
-                    elif name in ("left alt", "alt"): name = "alt"
-                    elif name in ("left windows", "right windows"): name = "windows"
-                    pressed.add(name)
-                    combo = "+".join(sorted(pressed))
-                    var.set(combo)
-                elif e.event_type == "up":
-                    # 短暂延迟后检查是否全部松开
-                    name = e.name.lower() if e.name else str(e.scan_code)
-                    if name in ("left shift", "shift"): name = "shift"
-                    elif name in ("left ctrl", "ctrl"): name = "ctrl"
-                    elif name in ("left alt", "alt"): name = "alt"
-                    elif name in ("left windows", "right windows"): name = "windows"
-                    pressed.discard(name)
-                    if not pressed:
-                        # 全部松开 → 完成录入
-                        keyboard.unhook_all()
-                        btn_text.set("开始录入")
-                        # 恢复输入法
-                        self._restore_ime()
-                        # 验证: 至少有一个非修饰键
-                        combo = var.get()
-                        if not combo or combo == "按下组合键...":
-                            var.set(original_value)
-                        return
-
-            keyboard.unhook_all()
-            keyboard.hook(on_key_full)
+        btn_text.set("录入中...")
+        var.set("按下组合键...")
+        pressed.clear()
+        keyboard.unhook_all()
+        keyboard.hook(_on_key)
 
     def _restore_ime(self) -> None:
         """恢复原始输入法布局。"""
