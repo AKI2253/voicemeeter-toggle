@@ -28,6 +28,7 @@ pyinstaller --onefile --windowed --name "VoiceMeeterToggle" ^
     --hidden-import=pyaudioop ^
     --add-data "settings.py;." ^
     --add-data "snapshot.py;." ^
+    --add-data "pyaudioop.py;." ^
     --collect-all sounddevice ^
     --collect-all soundfile ^
     main.py
