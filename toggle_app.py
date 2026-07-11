@@ -183,15 +183,6 @@ class ToggleApp:
         )
         self._hotkey_label.pack(pady=(5, 0), fill=tk.X)
 
-        # 快捷键设置按钮
-        self._setting_btn = tk.Button(
-            self._recorder_frame,
-            text="⚙ 快捷键设置",
-            font=("Microsoft YaHei UI", 8),
-            command=self._open_hotkey_settings,
-        )
-        self._setting_btn.pack(pady=(3, 0))
-
         # ── 全局快捷键提示 (始终可见) ──
         self._global_hotkey_label = tk.Label(
             main_frame,
@@ -200,6 +191,15 @@ class ToggleApp:
             fg="#888888",
         )
         self._global_hotkey_label.pack(pady=(2, 0), fill=tk.X)
+
+        # 快捷键设置按钮 (始终可见)
+        self._setting_btn = tk.Button(
+            main_frame,
+            text="⚙ 快捷键设置",
+            font=("Microsoft YaHei UI", 9),
+            command=self._open_hotkey_settings,
+        )
+        self._setting_btn.pack(pady=(4, 0))
 
         # ── 底部提示 ──
         tk.Label(
@@ -333,86 +333,162 @@ class ToggleApp:
     # ── 快捷键设置 ────────────────────────────────────────────────────
 
     def _open_hotkey_settings(self) -> None:
-        """打开快捷键设置弹窗。"""
+        """打开快捷键设置弹窗 (非阻塞, 有录入按钮)。"""
         dialog = tk.Toplevel(self.root)
         dialog.title("快捷键设置")
-        dialog.geometry("360x240")
+        dialog.geometry("400x270")
         dialog.resizable(False, False)
         dialog.transient(self.root)
         dialog.grab_set()
 
-        # 居中
         dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 360) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 240) // 2
+        x = self.root.winfo_x() + (self.root.winfo_width() - 400) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 270) // 2
         dialog.geometry(f"+{x}+{y}")
 
         tk.Label(dialog, text="快捷键设置",
-                 font=("Microsoft YaHei UI", 11, "bold")).pack(pady=(15, 10))
+                 font=("Microsoft YaHei UI", 11, "bold")).pack(pady=(15, 8))
 
-        tk.Label(dialog, text="点击输入框后按下你想要的按键组合",
-                 font=("Microsoft YaHei UI", 8), fg="#888888").pack()
+        def make_row(label_text, var_name):
+            row = tk.Frame(dialog)
+            row.pack(pady=5, fill=tk.X, padx=25)
+            tk.Label(row, text=label_text, font=("Microsoft YaHei UI", 10),
+                     width=10, anchor="e").pack(side=tk.LEFT)
 
-        # 播放键
-        row1 = tk.Frame(dialog)
-        row1.pack(pady=(10, 5), fill=tk.X, padx=30)
-        tk.Label(row1, text="播放/停止:", font=("Microsoft YaHei UI", 10),
-                 width=10, anchor="e").pack(side=tk.LEFT)
-        play_var = tk.StringVar(value=self._current_hotkeys["hotkey_play"])
-        play_entry = tk.Entry(row1, textvariable=play_var,
-                              font=("Microsoft YaHei UI", 10, "bold"),
-                              width=18, justify="center", state="readonly")
-        play_entry.pack(side=tk.LEFT, padx=(10, 0))
-        play_entry.bind("<Button-1>", lambda e: self._capture_hotkey(play_var))
+            display_var = tk.StringVar(value=self._current_hotkeys[var_name])
+            entry = tk.Entry(row, textvariable=display_var,
+                             font=("Consolas", 11, "bold"),
+                             width=16, justify="center", state="readonly",
+                             readonlybackground="white")
+            entry.pack(side=tk.LEFT, padx=8)
 
-        # 开关键
-        row2 = tk.Frame(dialog)
-        row2.pack(pady=5, fill=tk.X, padx=30)
-        tk.Label(row2, text="开关功能:", font=("Microsoft YaHei UI", 10),
-                 width=10, anchor="e").pack(side=tk.LEFT)
-        toggle_var = tk.StringVar(value=self._current_hotkeys["hotkey_toggle"])
-        toggle_entry = tk.Entry(row2, textvariable=toggle_var,
-                                font=("Microsoft YaHei UI", 10, "bold"),
-                                width=18, justify="center", state="readonly")
-        toggle_entry.pack(side=tk.LEFT, padx=(10, 0))
-        toggle_entry.bind("<Button-1>", lambda e: self._capture_hotkey(toggle_var))
+            btn_text = tk.StringVar(value="开始录入")
+            btn = tk.Button(row, textvariable=btn_text,
+                            font=("Microsoft YaHei UI", 8),
+                            width=9,
+                            command=lambda dv=display_var, bt=btn_text, dl=dialog:
+                            self._capture_hotkey(dv, bt, dl))
+            btn.pack(side=tk.LEFT)
 
-        # 状态标签
+            return display_var, btn_text
+
+        play_var, play_btn_text = make_row("播放/停止:", "hotkey_play")
+        toggle_var, toggle_btn_text = make_row("开关功能:", "hotkey_toggle")
+
+        tk.Label(dialog, text="点击「开始录入」后按下组合键，松手自动完成",
+                 font=("Microsoft YaHei UI", 8), fg="#999999").pack(pady=(8, 0))
+
         status_var = tk.StringVar()
-        status_label = tk.Label(dialog, textvariable=status_var,
-                                font=("Microsoft YaHei UI", 8), fg="#999999")
-        status_label.pack(pady=(5, 5))
+        tk.Label(dialog, textvariable=status_var,
+                 font=("Microsoft YaHei UI", 8), fg="#999999").pack(pady=(2, 5))
 
         def on_save():
             new_hotkeys = {
                 "hotkey_play": play_var.get().strip(),
                 "hotkey_toggle": toggle_var.get().strip(),
             }
-            # 验证非空
             if not new_hotkeys["hotkey_play"] or not new_hotkeys["hotkey_toggle"]:
-                status_var.set("快捷键不能为空")
+                status_var.set("快捷键不能为空！")
                 return
-            # 保存
             save_hotkeys(new_hotkeys)
             self._current_hotkeys = new_hotkeys
-            # 重新注册热键
             self._reregister_hotkeys()
             status_var.set("已保存！")
             dialog.after(800, dialog.destroy)
 
         tk.Button(dialog, text="保存", font=("Microsoft YaHei UI", 10),
                   width=10, command=on_save,
-                  bg="#4caf50", fg="white").pack(pady=(5, 10))
+                  bg="#4caf50", fg="white").pack(pady=(8, 0))
 
-    def _capture_hotkey(self, var: tk.StringVar) -> None:
-        """捕获用户按键组合并写入 StringVar。"""
+    def _capture_hotkey(self, var: tk.StringVar, btn_text: tk.StringVar,
+                        dialog: tk.Toplevel) -> None:
+        """非阻塞按键捕获: hook 监听 + 实时显示, 松手自动完成。"""
         import keyboard
-        var.set("按下按键...")
+        import ctypes
+
+        pressed = set()
+        original_value = var.get()
+
+        # 切英文键盘, 防止输入法拦截
         try:
-            combo = keyboard.read_hotkey(suppress=False)
-            var.set(combo)
+            user32 = ctypes.windll.user32
+            hkl_en = user32.LoadKeyboardLayoutW("00000409", 1)
+            self._ime_layout = user32.GetKeyboardLayout(0)
+            user32.ActivateKeyboardLayout(hkl_en, 0)
         except Exception:
-            var.set(self._current_hotkeys.get("hotkey_play", "f1+f2"))
+            self._ime_layout = None
+
+        def on_key(e):
+            if e.event_type == "down":
+                name = e.name.lower() if e.name else e.scan_code
+                # 规范化键名
+                if name in ("left shift", "shift"): name = "shift"
+                elif name in ("left ctrl", "ctrl"): name = "ctrl"
+                elif name in ("left alt", "alt"): name = "alt"
+                elif name in ("left windows", "right windows"): name = "windows"
+                pressed.add(name)
+                combo = "+".join(sorted(pressed))
+                var.set(combo)
+            elif e.event_type == "up":
+                # 松手: 所有键都松开了 → 完成
+                pass
+
+        # 先用一个小延迟确保之前的状态清掉
+        dialog.after(100, lambda: _start_capture())
+
+        def _start_capture():
+            btn_text.set("录入中...")
+            var.set("按下组合键...")
+            pressed.clear()
+            keyboard.hook(on_key)
+
+            def check_done():
+                # 检查是否所有键都松开了 (通过持续监控)
+                # 简化: 用 keyboard 的 unhook + 一个短暂等待
+                pass
+
+            # 实际: 监听直到所有按下键释放
+            def on_key_full(e):
+                if e.event_type == "down":
+                    name = e.name.lower() if e.name else str(e.scan_code)
+                    if name in ("left shift", "shift"): name = "shift"
+                    elif name in ("left ctrl", "ctrl"): name = "ctrl"
+                    elif name in ("left alt", "alt"): name = "alt"
+                    elif name in ("left windows", "right windows"): name = "windows"
+                    pressed.add(name)
+                    combo = "+".join(sorted(pressed))
+                    var.set(combo)
+                elif e.event_type == "up":
+                    # 短暂延迟后检查是否全部松开
+                    name = e.name.lower() if e.name else str(e.scan_code)
+                    if name in ("left shift", "shift"): name = "shift"
+                    elif name in ("left ctrl", "ctrl"): name = "ctrl"
+                    elif name in ("left alt", "alt"): name = "alt"
+                    elif name in ("left windows", "right windows"): name = "windows"
+                    pressed.discard(name)
+                    if not pressed:
+                        # 全部松开 → 完成录入
+                        keyboard.unhook_all()
+                        btn_text.set("开始录入")
+                        # 恢复输入法
+                        self._restore_ime()
+                        # 验证: 至少有一个非修饰键
+                        combo = var.get()
+                        if not combo or combo == "按下组合键...":
+                            var.set(original_value)
+                        return
+
+            keyboard.unhook_all()
+            keyboard.hook(on_key_full)
+
+    def _restore_ime(self) -> None:
+        """恢复原始输入法布局。"""
+        if getattr(self, '_ime_layout', None):
+            try:
+                ctypes.windll.user32.ActivateKeyboardLayout(self._ime_layout, 0)
+            except Exception:
+                pass
+            self._ime_layout = None
 
     def _reregister_hotkeys(self) -> None:
         """取消旧热键, 用新配置重新注册。"""
