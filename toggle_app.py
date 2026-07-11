@@ -23,6 +23,7 @@ from settings import (
     PLAY_BUTTON_TEXT, STOP_BUTTON_TEXT,
     SNAPSHOT_FILE, RECORDER_FILE_FILTERS,
     HOTKEY_PLAY_STOP, HOTKEY_TOGGLE, RECORDER_POLL_INTERVAL,
+    load_hotkeys, save_hotkeys,
 )
 
 
@@ -52,6 +53,7 @@ class ToggleApp:
         self._selected_file: str = ""       # 当前选择的音频文件路径
         self._hotkey_available: bool = False  # 全局热键是否可用
         self._poll_id = None                # 轮询 ID
+        self._current_hotkeys = load_hotkeys()  # 当前快捷键配置
 
         # ── UI 变量 ──
         self._file_var = tk.StringVar()
@@ -65,7 +67,7 @@ class ToggleApp:
         self._check_residual_snapshot()
 
         # ── 注册全局热键 ──
-        self._setup_hotkey()
+        self._setup_hotkeys()
 
         # ── 关闭窗口时的清理 ──
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -180,6 +182,15 @@ class ToggleApp:
             fg="#999999",
         )
         self._hotkey_label.pack(pady=(5, 0), fill=tk.X)
+
+        # 快捷键设置按钮
+        self._setting_btn = tk.Button(
+            self._recorder_frame,
+            text="⚙ 快捷键设置",
+            font=("Microsoft YaHei UI", 8),
+            command=self._open_hotkey_settings,
+        )
+        self._setting_btn.pack(pady=(3, 0))
 
         # ── 全局快捷键提示 (始终可见) ──
         self._global_hotkey_label = tk.Label(
@@ -319,25 +330,118 @@ class ToggleApp:
         # 继续轮询 (作为 on_finished 的兜底, 防止回调丢失)
         self._poll_id = self.root.after(RECORDER_POLL_INTERVAL, self._poll_playback)
 
-    # ── 全局热键 ──────────────────────────────────────────────────────
+    # ── 快捷键设置 ────────────────────────────────────────────────────
 
-    def _setup_hotkey(self) -> None:
-        """注册全局热键: F1+F2 播放/停止, F3 开启/关闭功能。"""
+    def _open_hotkey_settings(self) -> None:
+        """打开快捷键设置弹窗。"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("快捷键设置")
+        dialog.geometry("360x240")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # 居中
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 360) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 240) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        tk.Label(dialog, text="快捷键设置",
+                 font=("Microsoft YaHei UI", 11, "bold")).pack(pady=(15, 10))
+
+        tk.Label(dialog, text="点击输入框后按下你想要的按键组合",
+                 font=("Microsoft YaHei UI", 8), fg="#888888").pack()
+
+        # 播放键
+        row1 = tk.Frame(dialog)
+        row1.pack(pady=(10, 5), fill=tk.X, padx=30)
+        tk.Label(row1, text="播放/停止:", font=("Microsoft YaHei UI", 10),
+                 width=10, anchor="e").pack(side=tk.LEFT)
+        play_var = tk.StringVar(value=self._current_hotkeys["hotkey_play"])
+        play_entry = tk.Entry(row1, textvariable=play_var,
+                              font=("Microsoft YaHei UI", 10, "bold"),
+                              width=18, justify="center", state="readonly")
+        play_entry.pack(side=tk.LEFT, padx=(10, 0))
+        play_entry.bind("<Button-1>", lambda e: self._capture_hotkey(play_var))
+
+        # 开关键
+        row2 = tk.Frame(dialog)
+        row2.pack(pady=5, fill=tk.X, padx=30)
+        tk.Label(row2, text="开关功能:", font=("Microsoft YaHei UI", 10),
+                 width=10, anchor="e").pack(side=tk.LEFT)
+        toggle_var = tk.StringVar(value=self._current_hotkeys["hotkey_toggle"])
+        toggle_entry = tk.Entry(row2, textvariable=toggle_var,
+                                font=("Microsoft YaHei UI", 10, "bold"),
+                                width=18, justify="center", state="readonly")
+        toggle_entry.pack(side=tk.LEFT, padx=(10, 0))
+        toggle_entry.bind("<Button-1>", lambda e: self._capture_hotkey(toggle_var))
+
+        # 状态标签
+        status_var = tk.StringVar()
+        status_label = tk.Label(dialog, textvariable=status_var,
+                                font=("Microsoft YaHei UI", 8), fg="#999999")
+        status_label.pack(pady=(5, 5))
+
+        def on_save():
+            new_hotkeys = {
+                "hotkey_play": play_var.get().strip(),
+                "hotkey_toggle": toggle_var.get().strip(),
+            }
+            # 验证非空
+            if not new_hotkeys["hotkey_play"] or not new_hotkeys["hotkey_toggle"]:
+                status_var.set("快捷键不能为空")
+                return
+            # 保存
+            save_hotkeys(new_hotkeys)
+            self._current_hotkeys = new_hotkeys
+            # 重新注册热键
+            self._reregister_hotkeys()
+            status_var.set("已保存！")
+            dialog.after(800, dialog.destroy)
+
+        tk.Button(dialog, text="保存", font=("Microsoft YaHei UI", 10),
+                  width=10, command=on_save,
+                  bg="#4caf50", fg="white").pack(pady=(5, 10))
+
+    def _capture_hotkey(self, var: tk.StringVar) -> None:
+        """捕获用户按键组合并写入 StringVar。"""
+        import keyboard
+        var.set("按下按键...")
+        try:
+            combo = keyboard.read_hotkey(suppress=False)
+            var.set(combo)
+        except Exception:
+            var.set(self._current_hotkeys.get("hotkey_play", "f1+f2"))
+
+    def _reregister_hotkeys(self) -> None:
+        """取消旧热键, 用新配置重新注册。"""
+        import keyboard
+        try:
+            keyboard.unhook_all()
+        except Exception:
+            pass
+        self._setup_hotkeys()
+
+    def _setup_hotkeys(self) -> None:
+        """注册全局热键 (使用当前配置的值)。"""
         try:
             import keyboard
-            keyboard.add_hotkey(HOTKEY_PLAY_STOP, self._on_play_hotkey)
-            keyboard.add_hotkey(HOTKEY_TOGGLE, self._on_toggle_hotkey)
+            play_key = self._current_hotkeys.get("hotkey_play", "f1+f2")
+            toggle_key = self._current_hotkeys.get("hotkey_toggle", "f3")
+            keyboard.add_hotkey(play_key, self._on_play_hotkey)
+            keyboard.add_hotkey(toggle_key, self._on_toggle_hotkey)
             self._hotkey_available = True
-            # 播放热键提示 (Recorder 区域内)
-            self._hotkey_label.config(text="热键: F1+F2 播放/停止")
-            # 全局功能热键 (始终可见)
+            self._hotkey_label.config(text=f"热键: {play_key} 播放/停止")
             self._global_hotkey_label.config(
-                text="全局热键: F3 开启/关闭功能"
+                text=f"全局热键: {toggle_key} 开启/关闭功能"
             )
         except ImportError:
             self._hotkey_available = False
         except Exception:
             self._hotkey_available = False
+
+    # ── 全局热键回调 ──────────────────────────────────────────────────
 
     def _on_play_hotkey(self) -> None:
         """F1+F2 触发的播放/停止切换。"""
