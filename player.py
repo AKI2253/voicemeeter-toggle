@@ -74,7 +74,7 @@ class AudioPlayer:
                 import soundfile as sf
                 data, sr = sf.read(filepath, dtype="float32")
             elif suffix in (".mp3", ".m4a", ".aac", ".wma"):
-                data, sr = self._load_with_pydub(filepath)
+                data, sr = self._load_ffmpeg(filepath)
             else:
                 import soundfile as sf
                 data, sr = sf.read(filepath, dtype="float32")
@@ -88,29 +88,33 @@ class AudioPlayer:
             self._audio_data = data
             self._sample_rate = sr
 
-    def _load_with_pydub(self, filepath: str):
-        import subprocess as _sp
-        _orig = _sp.Popen
-        _no_win = 0x08000000  # CREATE_NO_WINDOW: 屏蔽 ffmpeg 命令行弹窗
-        _sp.Popen = lambda *a, **kw: _orig(
-            *a, **{**kw, 'creationflags': kw.get('creationflags', 0) | _no_win})
+    def _load_ffmpeg(self, filepath: str):
+        """通过 ffmpeg 直接解码 (无弹窗, 不依赖 pydub monkey-patch)。"""
+        import subprocess as sp
+        import io
+        import soundfile as sf
+        _no_win = 0x08000000  # CREATE_NO_WINDOW
+        cmd = [
+            "ffmpeg", "-i", filepath,
+            "-ac", "1", "-f", "wav", "-acodec", "pcm_s16le", "-"
+        ]
         try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(filepath)
-            sr = audio.frame_rate
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
-            samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-            samples /= np.iinfo(audio.array_type).max
-            return samples, sr
+            proc = sp.run(
+                cmd, stdin=sp.DEVNULL, stdout=sp.PIPE, stderr=sp.DEVNULL,
+                creationflags=_no_win, check=False,
+            )
         except FileNotFoundError:
             raise PlayerError(
                 "播放 MP3 需要 ffmpeg。\n"
                 "请安装 ffmpeg 并添加到 PATH，\n"
                 "或使用 WAV/FLAC 格式。"
             )
-        finally:
-            _sp.Popen = _orig  # 无论成败都恢复, 防止后续 subprocess 异常
+        if proc.returncode != 0 or not proc.stdout:
+            raise PlayerError(f"ffmpeg 解码失败 (code {proc.returncode})")
+        data, sr = sf.read(io.BytesIO(proc.stdout), dtype="float32")
+        if data.ndim > 1:
+            data = data.mean(axis=1).astype(np.float32)
+        return data, sr
 
     def play(self, on_finished: Optional[Callable[[], None]] = None) -> None:
         """开始播放。"""
