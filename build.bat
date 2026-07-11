@@ -25,6 +25,7 @@ pyinstaller --onefile --windowed --name "VoiceMeeterToggle" ^
     --hidden-import=pydub ^
     --hidden-import=keyboard ^
     --hidden-import=_cffi_backend ^
+    --hidden-import=pyaudioop ^
     --add-data "settings.py;." ^
     --add-data "snapshot.py;." ^
     --collect-all sounddevice ^
