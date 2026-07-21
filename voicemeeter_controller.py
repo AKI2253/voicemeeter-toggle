@@ -47,7 +47,7 @@ class VoicemeeterController:
         try:
             self._vm.login()
             return True
-        except (voicemeeterlib.error.VMRError, OSError, Exception):
+        except (voicemeeterlib.error.VMError, OSError, Exception):
             self._vm = None
             return False
 
