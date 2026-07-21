@@ -16,7 +16,7 @@ from enum import Enum
 from audio_controller import AudioController, AudioControllerError
 from voicemeeter_controller import VoicemeeterController, VmControllerError
 from player import AudioPlayer, PlayerError
-from snapshot import FullSnapshot
+from snapshot import FullSnapshot, WindowsDeviceSnapshot
 from settings import (
     WINDOW_TITLE, WINDOW_SIZE,
     BUTTON_TEXT_OFF, BUTTON_TEXT_ON, BUTTON_TEXT_ERROR,
@@ -536,14 +536,19 @@ class ToggleApp:
             self._set_error("VoiceMeeter 未运行！请先启动 VoiceMeeter")
             return
 
-        # 2. 快照当前状态
+        # 2. 快照当前状态 (Windows 失败不阻塞, VoiceMeeter 仍可用)
         try:
             vm_snapshot = self.vm_ctrl.capture()
-            windows_snapshot = self.audio_ctrl.capture()
-        except (VmControllerError, AudioControllerError) as e:
-            self._set_error(f"获取状态失败:\n{e}")
+        except VmControllerError as e:
+            self._set_error(f"获取 VoiceMeeter 状态失败:\n{e}")
             self.vm_ctrl.disconnect()
             return
+
+        try:
+            windows_snapshot = self.audio_ctrl.capture()
+        except AudioControllerError:
+            windows_snapshot = WindowsDeviceSnapshot("", "")
+            self._set_status("无法获取 Windows 设备, 仅启用 VoiceMeeter 路由")
 
         full_snapshot = FullSnapshot(vm=vm_snapshot, windows=windows_snapshot)
         full_snapshot.save_to_file(self._snapshot_path)

@@ -6,7 +6,9 @@
 注意: 切换默认音频设备需要管理员权限。
 """
 
-from pycaw.pycaw import AudioUtilities, ERole
+import comtypes
+
+from pycaw.pycaw import AudioUtilities, ERole, EDataFlow, DEVICE_STATE
 
 from snapshot import WindowsDeviceSnapshot
 from device_finder import DeviceFinder
@@ -20,7 +22,6 @@ class AudioControllerError(Exception):
 class AudioController:
     """管理 Windows 默认音频设备的保存、切换和恢复。"""
 
-    # 设置默认设备时为所有三个角色设置
     _ALL_ROLES = [ERole.eConsole, ERole.eMultimedia, ERole.eCommunications]
 
     # ── 快照 ──────────────────────────────────────────────────────────
@@ -29,21 +30,50 @@ class AudioController:
     def capture() -> WindowsDeviceSnapshot:
         """读取当前默认播放和录音设备 ID。
 
-        GetSpeakers/GetMicrophone 可能返回 AudioDevice (.id 属性)
-        或 POINTER(IMMDevice) (.GetId() 方法)。
-
-        Raises:
-            AudioControllerError: 无法获取当前默认设备
+        容错: pycaw 的 IMMDevice COM 对象在某些系统上多次调用后会失效。
+        遇到错误时尝试降级方案。
         """
+        pb_id = ""
+        rec_id = ""
+
+        # 尝试获取播放设备
         try:
-            playback = AudioUtilities.GetSpeakers()
-            recording = AudioUtilities.GetMicrophone()
-            return WindowsDeviceSnapshot(
-                playback_device_id=AudioController._get_device_id(playback),
-                recording_device_id=AudioController._get_device_id(recording),
+            comtypes.CoInitialize()
+            pb = AudioUtilities.GetSpeakers()
+            pb_id = AudioController._get_device_id(pb)
+        except Exception:
+            # 降级: 用 GetAllDevices 枚举找默认设备
+            try:
+                devs = AudioUtilities.GetAllDevices(
+                    EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)
+                if devs:
+                    pb_id = devs[0].id
+            except Exception:
+                pass
+
+        # 尝试获取录音设备
+        try:
+            rec = AudioUtilities.GetMicrophone()
+            rec_id = AudioController._get_device_id(rec)
+        except Exception:
+            try:
+                devs = AudioUtilities.GetAllDevices(
+                    EDataFlow.eCapture.value, DEVICE_STATE.ACTIVE.value)
+                if devs:
+                    rec_id = devs[0].id
+            except Exception:
+                pass
+
+        if not pb_id and not rec_id:
+            raise AudioControllerError(
+                "无法获取任何音频设备。\n"
+                "请检查 Windows 音频服务是否正常运行。"
             )
-        except Exception as e:
-            raise AudioControllerError(f"无法获取当前默认音频设备: {e}") from e
+
+        return WindowsDeviceSnapshot(
+            playback_device_id=pb_id,
+            recording_device_id=rec_id,
+        )
 
     # ── 应用切换 ──────────────────────────────────────────────────────
 
